@@ -19,6 +19,7 @@ path = "src/rustfmt.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+ra_ap_syntax = "=0.0.349"
 
 [dev-dependencies]
 tempfile = "3"
