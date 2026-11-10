@@ -3,4 +3,22 @@ name = "nitpick"
 version = "0.1.0"
 edition = "2024"
 
+# Run inline module tests as integration targets so Cargo supplies the binary.
+[[bin]]
+name = "nitpick"
+path = "src/main.rs"
+test = false
+
+[[test]]
+name = "cli"
+path = "src/cli.rs"
+
+[[test]]
+name = "rustfmt"
+path = "src/rustfmt.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
