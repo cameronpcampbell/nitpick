@@ -1,5 +1,6 @@
 /target
 .agents
+.plans
 
 # MacOS file system clutter.
 ._*
