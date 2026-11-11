@@ -17,9 +17,14 @@ path = "src/cli.rs"
 name = "rustfmt"
 path = "src/rustfmt.rs"
 
+[[test]]
+name = "format"
+path = "src/format.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 ra_ap_syntax = "=0.0.349"
-
-[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+similar = "2"
 tempfile = "3"
+toml = "0.9"

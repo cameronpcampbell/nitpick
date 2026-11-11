@@ -4,12 +4,15 @@ use std::error::Error;
 use std::fmt;
 use std::ops::Range;
 
+use serde::Deserialize;
+
 pub use ra_ap_syntax::Edition;
 use ra_ap_syntax::ast::{self, BinaryOp, ElseBranch};
 use ra_ap_syntax::{AstNode, SourceFile, SyntaxKind, SyntaxNode, SyntaxToken, TextRange};
 
 /// Each switch controls only the boundaries requested by that rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
 pub struct RuleOptions {
     pub blank_lines_around_multiline: bool,
     pub blank_line_at_end_of_if: bool,
@@ -100,9 +103,11 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
             usize::from(error.range().start()),
             error.to_string(),
         ));
+
     }
 
     let root = parsed.tree().syntax().clone();
+
     let mut pass = Pass {
         source,
         options,
@@ -112,8 +117,10 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
         protected: Vec::new(),
         edits: Vec::new(),
     };
+
     pass.collect(&root);
     pass.separate_units();
+
     let output = pass.apply()?;
     let reparsed = SourceFile::parse(&output, edition);
 
@@ -123,6 +130,7 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
             0,
             "whitespace edits changed Rust syntax",
         ));
+
     }
 
     Ok(output)
@@ -134,16 +142,19 @@ impl Pass<'_> {
             self.protected.push(byte_range(node.text_range()));
 
             return;
+
         }
 
         if node.kind() == SyntaxKind::ATTR {
             self.protected.push(byte_range(node.text_range()));
 
             return;
+
         }
 
         if is_list(node.kind()) {
             self.lists.push(node.clone());
+
         }
 
         if self.options.blank_line_at_end_of_if
@@ -151,11 +162,14 @@ impl Pass<'_> {
         {
             if let Some(block) = branch.then_branch() {
                 self.layout_branch(&block, true);
+
             }
 
             if let Some(ElseBranch::Block(block)) = branch.else_branch() {
                 self.layout_branch(&block, false);
+
             }
+
         }
 
         for element in node.children_with_tokens() {
@@ -178,13 +192,16 @@ impl Pass<'_> {
 
         if is_skipped(list.syntax()) {
             return;
+
         }
 
         let (Some(open), Some(close)) = (list.l_curly_token(), list.r_curly_token()) else {
             return;
         };
+
         let start = usize::from(open.text_range().end());
         let end = usize::from(close.text_range().start());
+
         let contents: Vec<_> = list
             .syntax()
             .descendants_with_tokens()
@@ -195,15 +212,18 @@ impl Pass<'_> {
                     && token.text_range().end() <= close.text_range().start()
             })
             .collect();
+
         let (Some(first), Some(last)) = (contents.first(), contents.last()) else {
             return;
         };
+
         let first = usize::from(first.text_range().start());
         let last = usize::from(last.text_range().end());
         let compact = !self.source[start..end].contains('\n');
 
         if !padded && !compact {
             return;
+
         }
 
         let base = self.branch_indent(block.syntax());
@@ -213,9 +233,16 @@ impl Pass<'_> {
                 start..first,
                 format!("{}{}{}", self.newline, base, self.indent),
             );
+
         }
 
-        let lines = if padded { 2 } else { 1 };
+        let lines = if padded {
+            2
+
+        } else {
+            1
+        };
+
         self.request(last..end, format!("{}{}", self.newline.repeat(lines), base));
     }
 
@@ -228,9 +255,11 @@ impl Pass<'_> {
             let Some(list) = ast::StmtList::cast(ancestor) else {
                 continue;
             };
+
             let Some(block) = list.syntax().parent().and_then(ast::BlockExpr::cast) else {
                 continue;
             };
+
             let is_branch = block
                 .syntax()
                 .parent()
@@ -238,6 +267,7 @@ impl Pass<'_> {
 
             if is_branch && !list.syntax().text().to_string().contains('\n') {
                 base.push_str(&self.indent);
+
             }
         }
 
@@ -247,6 +277,7 @@ impl Pass<'_> {
     fn separate_units(&mut self) {
         for list in self.lists.clone() {
             let units: Vec<_> = list.children().filter_map(Unit::new).collect();
+
             let in_trait = list.kind() == SyntaxKind::ASSOC_ITEM_LIST
                 && list
                     .parent()
@@ -255,16 +286,20 @@ impl Pass<'_> {
             for pair in units.windows(2) {
                 let left = &pair[0];
                 let right = &pair[1];
+
                 let multiline = self.options.blank_lines_around_multiline
                     && (self.multiline(left) || self.multiline(right));
+
                 let methods = self.options.blank_lines_between_trait_methods
                     && in_trait
                     && left.node.kind() == SyntaxKind::FN
                     && right.node.kind() == SyntaxKind::FN;
+
                 let kinds = self.options.blank_lines_between_node_types && left.kind != right.kind;
 
                 if multiline || methods || kinds {
                     self.separate(left, right);
+
                 }
             }
         }
@@ -291,14 +326,18 @@ impl Pass<'_> {
 
             if range.start >= end {
                 break;
+
             }
 
             if current.kind() == SyntaxKind::WHITESPACE {
                 if current.text().contains('\n') {
                     break;
+
                 }
+
             } else if current.kind() == SyntaxKind::COMMENT {
                 start = range.end;
+
             } else {
                 return;
             }
@@ -309,14 +348,18 @@ impl Pass<'_> {
         let gap_end = token.map_or(end, |token| {
             if token.kind() == SyntaxKind::WHITESPACE {
                 usize::from(token.text_range().end()).min(end)
+
             } else {
                 usize::from(token.text_range().start()).min(end)
             }
         });
+
         let gap = &self.source[start..gap_end];
+
         let indent = gap
             .rsplit_once('\n')
             .map_or_else(|| line_indent(self.source, end), |(_prefix, indent)| indent);
+
         self.request(
             start..gap_end,
             format!("{}{}", self.newline.repeat(2), indent),
@@ -326,11 +369,13 @@ impl Pass<'_> {
     fn request(&mut self, range: Range<usize>, replacement: String) {
         if self.source[range.clone()] != replacement {
             self.edits.push(Edit { range, replacement });
+
         }
     }
 
     fn apply(mut self) -> Result<String, Diagnostic> {
         self.protected.sort_by_key(|range| range.start);
+
         self.edits.retain(|edit| {
             let idx = self
                 .protected
@@ -341,8 +386,10 @@ impl Pass<'_> {
                 .get(idx)
                 .is_some_and(|range| intersects(&edit.range, range))
         });
+
         self.edits
             .sort_by_key(|edit| (edit.range.start, edit.range.end));
+
         self.edits.dedup_by(|left, right| {
             left.range == right.range && left.replacement == right.replacement
         });
@@ -355,6 +402,7 @@ impl Pass<'_> {
                     pair[1].range.start,
                     "overlapping whitespace edits",
                 ));
+
             }
         }
 
@@ -371,6 +419,7 @@ impl Pass<'_> {
                     edit.range.start,
                     "unsafe whitespace edit",
                 ));
+
             }
 
             output.replace_range(edit.range, &edit.replacement);
@@ -387,17 +436,20 @@ impl Unit {
             && !ast::Expr::can_cast(node.kind())
         {
             return None;
+
         }
 
         let code_node = ast::ExprStmt::cast(node.clone())
             .and_then(|statement| statement.expr())
             .map_or_else(|| node.clone(), |expr| expr.syntax().clone());
+
         let first = code_node.children_with_tokens().find(|element| {
             !matches!(
                 element.kind(),
                 SyntaxKind::ATTR | SyntaxKind::COMMENT | SyntaxKind::WHITESPACE
             )
         })?;
+
         let code = usize::from(first.text_range().start())..usize::from(node.text_range().end());
         let kind = classify(&node);
 
@@ -412,6 +464,7 @@ fn classify(node: &SyntaxNode) -> UnitKind {
             .find(|child| ast::Expr::can_cast(child.kind()))
     {
         return classify(&inner);
+
     }
 
     if ast::BinExpr::cast(node.clone())
@@ -419,10 +472,12 @@ fn classify(node: &SyntaxNode) -> UnitKind {
         .is_some_and(|operator| matches!(operator, BinaryOp::Assignment { .. }))
     {
         return UnitKind::Assignment;
+
     }
 
     if matches!(node.kind(), SyntaxKind::MACRO_EXPR | SyntaxKind::MACRO_CALL) {
         return UnitKind::Macro;
+
     }
 
     UnitKind::Syntax(node.kind())
@@ -449,10 +504,12 @@ fn is_skipped(node: &SyntaxNode) -> bool {
                 .is_some_and(|path| {
                     let text: String = path
                         .syntax()
-                        .text()
-                        .to_string()
-                        .chars()
-                        .filter(|character| !character.is_whitespace())
+                        .descendants_with_tokens()
+                        .filter_map(|element| element.into_token())
+                        .filter(|token| {
+                            !matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT)
+                        })
+                        .map(|token| token.text().to_owned())
                         .collect();
 
                     text == "rustfmt::skip"
@@ -472,6 +529,7 @@ fn intersects(edit: &Range<usize>, protected: &Range<usize>) -> bool {
 fn line_indent(source: &str, offset: usize) -> &str {
     let start = source[..offset].rfind('\n').map_or(0, |idx| idx + 1);
     let line = &source[start..offset];
+
     let length = line
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
@@ -495,6 +553,7 @@ fn newline_convention(root: &SyntaxNode) -> &'static str {
 
     if newline.is_some_and(|token| token.text().contains("\r\n")) {
         return "\r\n";
+
     }
 
     "\n"
@@ -520,6 +579,7 @@ fn indentation_unit(root: &SyntaxNode) -> String {
 
     if prefixes.iter().any(|indent| indent.starts_with('\t')) {
         return "\t".to_owned();
+
     }
 
     " ".repeat(prefixes.iter().map(String::len).min().unwrap_or(4))
@@ -543,18 +603,22 @@ mod tests {
         blank_lines_between_trait_methods: false,
         blank_lines_between_node_types: false,
     };
+
     const MULTILINE: RuleOptions = RuleOptions {
         blank_lines_around_multiline: true,
         ..NONE
     };
+
     const BRANCHES: RuleOptions = RuleOptions {
         blank_line_at_end_of_if: true,
         ..NONE
     };
+
     const METHODS: RuleOptions = RuleOptions {
         blank_lines_between_trait_methods: true,
         ..NONE
     };
+
     const KINDS: RuleOptions = RuleOptions {
         blank_lines_between_node_types: true,
         ..NONE
@@ -564,10 +628,12 @@ mod tests {
         let output = format(before, Edition::Edition2024, options).unwrap();
 
         assert_eq!(output, after);
+
         assert_eq!(
             format(&output, Edition::Edition2024, options).unwrap(),
             output
         );
+
         assert_eq!(
             tokens(
                 SourceFile::parse(before, Edition::Edition2024)
@@ -607,6 +673,7 @@ mod tests {
 "#,
             MULTILINE,
         );
+
         check(
             r#"fn main() {
     let first = Thing {
@@ -686,6 +753,7 @@ mod tests {
 "#,
             KINDS,
         );
+
         check(
             r#"use one::Thing;
 use two::Other;
@@ -730,6 +798,7 @@ fn main() {}
 "#,
             BRANCHES,
         );
+
         check(
             r#"fn value() -> i32 {
     if let Some(value) = input {
@@ -788,6 +857,7 @@ fn main() {}
 "#,
             RuleOptions::default(),
         );
+
         check(
             "fn main() {\n    if ready {} else if waiting { /* Wait. */ } else {}\n    if ready {\n        // Nothing yet.   \n    }\n}\n",
             "fn main() {\n    if ready {} else if waiting {\n        /* Wait. */\n\n    } else {}\n    if ready {\n        // Nothing yet.   \n\n    }\n}\n",
@@ -813,6 +883,7 @@ fn main() {}
     fn save(&self);
 }
 "#;
+
         let after = r#"trait Store {
     fn open(&self);
 
@@ -831,8 +902,10 @@ fn main() {}
     fn save(&self);
 }
 "#;
+
         check(before, after, METHODS);
         check(before, before, NONE);
+
         check(
             r#"trait Store {
     fn open(&self);
@@ -847,6 +920,7 @@ fn main() {}
 "#,
             METHODS,
         );
+
         check(
             r#"trait Store {
     fn open(&self);
@@ -875,7 +949,9 @@ fn main() {}
     let pear = 2;
 }
 "#;
+
         check(source, source, MULTILINE);
+
         check(
             r#"fn main() {
     let apple = 1; // Keep with apple.
@@ -919,13 +995,18 @@ fn main() {
     let character = 'λ';
 }
 "###;
+
         let output = format(source, Edition::Edition2024, RuleOptions::default()).unwrap();
+
         check(source, &output, RuleOptions::default());
+
         assert!(output.contains("\n\nfn main()"));
         assert!(output.contains("    opaque! { strange Rust tokens => { } }\n\n    let bytes"));
         assert!(output.contains("    let bytes = b\"\\n\\x00\";\n    let byte"));
+
         let skipped =
             "#![rustfmt::skip]\nfn main(){if true { 1 } else { 2 };let value=0;consume(value);}";
+
         check(skipped, skipped, RuleOptions::default());
     }
 
@@ -936,6 +1017,7 @@ fn main() {
             "fn main() {\r\n\tlet café = 0;\r\n\r\n\tlet value = if ready {\r\n\t\tcafé\r\n\r\n\t} else {\r\n\t\t2\r\n\t};\r\n\r\n\tconsume(value);\r\n}",
             RuleOptions::default(),
         );
+
         let source = r#"
 fn main() {
     let value = 1;
@@ -945,7 +1027,9 @@ fn main() {
 }
 
 "#;
+
         check(source, source, NONE);
+
         check(
             source,
             r#"
@@ -1152,6 +1236,7 @@ fn main() {
     fn opaque_contents_are_protected_including_their_whitespace() {
         let before = "#[rustfmt::skip]\nmod untouched { fn main(){if ready { value }; let x=1; call(x);} }\nmacro_rules! untouched { () => { if ready { value } else { other } } }\nfn main() {\n    opaque! {\n\t\tif ready { value } else { other }\n\n\n    };\n    let value = if ready { 1 } else { 2 };\n    #[rustfmt::skip]\n    let skipped = ||{ if ready { value }; call();};\n}\n";
         let after = "#[rustfmt::skip]\nmod untouched { fn main(){if ready { value }; let x=1; call(x);} }\n\nmacro_rules! untouched { () => { if ready { value } else { other } } }\n\nfn main() {\n    opaque! {\n\t\tif ready { value } else { other }\n\n\n    };\n\n    let value = if ready {\n        1\n\n    } else {\n        2\n    };\n\n    #[rustfmt::skip]\n    let skipped = ||{ if ready { value }; call();};\n}\n";
+
         check(before, after, RuleOptions::default());
     }
 
@@ -1182,6 +1267,7 @@ fn main() {
 "#,
             KINDS,
         );
+
         check(
             r#"fn main() {
     if ready {
@@ -1217,6 +1303,7 @@ fn main() {
     fn close(&self);
 }
 "#;
+
         let after = r#"trait Store {
     fn open(&self);
 
@@ -1247,6 +1334,7 @@ fn main() {
             "fn main() {\n    let text = r#\"α\r\n\tcharacters\"#;\n\n    let value = if ready {\n        1\n\n    } else {\n        2\n    };\n}\n",
             RuleOptions::default(),
         );
+
         check(
             "macro_rules! opaque { () => {\r\n\tignored\r\n} }\nfn main() {\n  if ready { value };\n}\n",
             "macro_rules! opaque { () => {\r\n\tignored\r\n} }\n\nfn main() {\n  if ready {\n    value\n\n  };\n}\n",
@@ -1264,6 +1352,7 @@ fn main() {
     consume(other);
 }
 "#;
+
         check(source, source, MULTILINE);
     }
 

@@ -22,6 +22,7 @@ impl fmt::Display for LaunchError {
 
 pub fn run(arguments: &[OsString]) -> Result<i32, LaunchError> {
     let executable = env::var_os("NITPICK_RUSTFMT").unwrap_or_else(|| "rustfmt".into());
+
     let status = Command::new(&executable)
         .args(arguments)
         .status()
@@ -52,6 +53,7 @@ mod tests {
     fn binary() -> PathBuf {
         if let Some(binary) = option_env!("CARGO_BIN_EXE_nitpick") {
             return binary.into();
+
         }
 
         // Cargo also checks the binary's test target under --all-targets.
@@ -67,9 +69,11 @@ mod tests {
 
     fn wrapper(directory: &Path) -> Command {
         let mut command = Command::new(binary());
+
         command
             .current_dir(directory)
-            .env("NITPICK_RUSTFMT", installed_rustfmt());
+            .env("NITPICK_RUSTFMT", installed_rustfmt())
+            .arg("rustfmt");
 
         command
     }
@@ -82,8 +86,11 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+
         let mut stdin = child.stdin.take().unwrap();
+
         stdin.write_all(input.as_bytes()).unwrap();
+
         drop(stdin);
 
         child.wait_with_output().unwrap()
@@ -98,6 +105,7 @@ mod tests {
     #[test]
     fn stdin_matches_rustfmt_for_formatting_and_check_mode() {
         let directory = tempdir().unwrap();
+
         let cases: &[(&[&str], &str)] = &[
             (&[], UNFORMATTED),
             (&[], FORMATTED),
@@ -109,7 +117,9 @@ mod tests {
 
         for (arguments, input) in cases {
             let mut direct = Command::new(installed_rustfmt());
+
             direct.current_dir(directory.path());
+
             let direct = capture(direct, arguments, input);
             let wrapped = capture(wrapper(directory.path()), arguments, input);
 
@@ -122,8 +132,10 @@ mod tests {
         let directory = tempdir().unwrap();
         let direct_dir = directory.path().join("direct");
         let wrapper_dir = directory.path().join("wrapper");
+
         fs::create_dir(&direct_dir).unwrap();
         fs::create_dir(&wrapper_dir).unwrap();
+
         let cases: &[(&[&str], &str, i32)] = &[
             (&[], UNFORMATTED, 0),
             (&[], FORMATTED, 0),
@@ -139,15 +151,19 @@ mod tests {
         for (options, input, code) in cases {
             fs::write(direct_dir.join("source with spaces.rs"), input).unwrap();
             fs::write(wrapper_dir.join("source with spaces.rs"), input).unwrap();
+
             let arguments = [*options, &["source with spaces.rs"]].concat();
+
             let direct = Command::new(installed_rustfmt())
                 .args(&arguments)
                 .current_dir(&direct_dir)
                 .output()
                 .unwrap();
+
             let wrapped = wrapper(&wrapper_dir).args(&arguments).output().unwrap();
 
             assert_eq!(direct.status.code(), Some(*code));
+
             // Rustfmt includes absolute paths in file diffs and stdout headers.
             assert_eq!(
                 String::from_utf8_lossy(&wrapped.stdout)
@@ -155,8 +171,10 @@ mod tests {
                 String::from_utf8_lossy(&direct.stdout)
                     .replace(direct_dir.to_str().unwrap(), "SOURCE"),
             );
+
             assert_eq!(wrapped.status.code(), direct.status.code());
             assert_eq!(wrapped.stderr, direct.stderr);
+
             assert_eq!(
                 fs::read(wrapper_dir.join("source with spaces.rs")).unwrap(),
                 fs::read(direct_dir.join("source with spaces.rs")).unwrap(),
@@ -169,12 +187,15 @@ mod tests {
         let directory = tempdir().unwrap();
         let invalid = "fn main( {";
         let mut direct = Command::new(installed_rustfmt());
+
         direct.current_dir(directory.path());
+
         let direct = capture(direct, &[], invalid);
         let wrapped = capture(wrapper(directory.path()), &[], invalid);
 
         assert!(!direct.status.success());
         assert!(!direct.stderr.is_empty());
+
         compare(&direct, &wrapped);
     }
 
@@ -187,6 +208,7 @@ mod tests {
 
         for target in [&direct_dir, &wrapper_dir] {
             fs::create_dir_all(target.join("config dir")).unwrap();
+
             fs::write(
                 target.join("config dir/rustfmt.toml"),
                 "hard_tabs = false\n",
@@ -214,11 +236,13 @@ mod tests {
             filenames[0],
             filenames[1],
         ];
+
         let direct = Command::new(installed_rustfmt())
             .current_dir(&direct_dir)
             .args(arguments)
             .output()
             .unwrap();
+
         let wrapped = wrapper(&wrapper_dir).args(arguments).output().unwrap();
 
         assert!(
@@ -226,6 +250,7 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&direct.stderr)
         );
+
         compare(&direct, &wrapped);
 
         for filename in filenames {
@@ -233,6 +258,7 @@ mod tests {
                 fs::read(wrapper_dir.join(filename)).unwrap(),
                 fs::read(direct_dir.join(filename)).unwrap(),
             );
+
             assert_eq!(
                 fs::read(wrapper_dir.join(filename).with_extension("bk")).unwrap(),
                 fs::read(direct_dir.join(filename).with_extension("bk")).unwrap(),
@@ -244,6 +270,7 @@ mod tests {
     fn missing_executable_is_reported_but_wrapper_help_and_version_still_work() {
         let directory = tempdir().unwrap();
         let missing = directory.path().join("missing rustfmt");
+
         let output = wrapper(directory.path())
             .env("NITPICK_RUSTFMT", &missing)
             .output()
@@ -254,7 +281,8 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stderr).contains(missing.to_str().unwrap()));
 
         for argument in ["--help", "--version"] {
-            let output = wrapper(directory.path())
+            let output = Command::new(binary())
+                .current_dir(directory.path())
                 .env("NITPICK_RUSTFMT", &missing)
                 .arg(argument)
                 .output()
@@ -265,7 +293,7 @@ mod tests {
             assert!(String::from_utf8_lossy(&output.stdout).contains("nitpick"));
         }
 
-        let invalid = wrapper(directory.path())
+        let invalid = Command::new(binary())
             .env("NITPICK_RUSTFMT", &missing)
             .arg("--unknown-option")
             .output()
@@ -290,13 +318,11 @@ mod tests {
                 .args(&arguments)
                 .output()
                 .unwrap();
-            let wrapped = wrapper(directory.path())
-                .arg("rustfmt")
-                .args(&arguments)
-                .output()
-                .unwrap();
+
+            let wrapped = wrapper(directory.path()).args(&arguments).output().unwrap();
 
             assert!(direct.status.success());
+
             compare(&direct, &wrapped);
         }
     }
@@ -304,6 +330,7 @@ mod tests {
     #[cfg(unix)]
     fn executable(directory: &Path, contents: &str) -> PathBuf {
         let path = directory.join("custom rustfmt");
+
         fs::write(&path, contents).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -314,36 +341,39 @@ mod tests {
     #[test]
     fn custom_child_inherits_streams_environment_directory_and_arguments() {
         let directory = tempdir().unwrap();
+
         let child = executable(
             directory.path(),
             "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$SHIM_TEST_VALUE\" \"$RUSTFMT\" \"$@\"\ncat\nprintf 'child diagnostic\\n' >&2\nexit 37\n",
         );
+
         let path = OsString::from_vec(b"source \xff.rs".to_vec());
+
         let cases: &[&[&str]] = &[
-            &["rustfmt", "--unknown", "--"],
+            &["--unknown", "--"],
             &["--check", "--config=max_width=80,hard_tabs=true", "--"],
         ];
 
         for arguments in cases {
             let mut command = wrapper(directory.path());
+
             command
                 .env("NITPICK_RUSTFMT", &child)
                 .env("SHIM_TEST_VALUE", "inherited environment")
                 .env("RUSTFMT", binary())
                 .args(*arguments)
                 .arg(&path);
+
             let output = capture(command, &[], "stdin contents\n");
+
             let mut expected = format!(
                 "{}\ninherited environment\n{}\n",
                 directory.path().canonicalize().unwrap().display(),
                 binary().display()
             )
             .into_bytes();
-            let forwarded = if arguments[0] == "rustfmt" {
-                &arguments[1..]
-            } else {
-                arguments
-            };
+
+            let forwarded = *arguments;
 
             for argument in forwarded {
                 expected.extend_from_slice(argument.as_bytes());
@@ -363,11 +393,14 @@ mod tests {
     #[test]
     fn path_lookup_ignores_cargos_rustfmt_override() {
         let directory = tempdir().unwrap();
+
         let child = executable(
             directory.path(),
             "#!/bin/sh\nprintf 'rustfmt from PATH\\n'\n",
         );
+
         fs::rename(child, directory.path().join("rustfmt")).unwrap();
+
         let output = wrapper(directory.path())
             .env_remove("NITPICK_RUSTFMT")
             .env("PATH", directory.path())
@@ -385,6 +418,7 @@ mod tests {
     fn a_child_terminated_by_a_signal_is_a_failure() {
         let directory = tempdir().unwrap();
         let child = executable(directory.path(), "#!/bin/sh\nkill -TERM $$\n");
+
         let output = wrapper(directory.path())
             .env("NITPICK_RUSTFMT", child)
             .output()
