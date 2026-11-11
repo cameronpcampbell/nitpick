@@ -317,6 +317,7 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
                     return Err(unsupported(path, "path escapes the filesystem root"));
                 }
             }
+
             Component::CurDir => {}
             component => resolved.push(component.as_os_str()),
         }

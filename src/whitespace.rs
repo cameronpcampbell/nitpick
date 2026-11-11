@@ -161,11 +161,13 @@ impl Pass<'_> {
         for element in node.children_with_tokens() {
             match element {
                 ra_ap_syntax::NodeOrToken::Node(child) => self.collect(&child),
+
                 ra_ap_syntax::NodeOrToken::Token(token)
                     if token.kind() != SyntaxKind::WHITESPACE =>
                 {
                     self.protected.push(byte_range(token.text_range()));
                 }
+
                 ra_ap_syntax::NodeOrToken::Token(_) => {}
             }
         }
@@ -392,6 +394,7 @@ impl Unit {
             && !ast::Stmt::can_cast(node.kind())
             && !ast::Expr::can_cast(node.kind())
             && !is_field(node.kind())
+            && node.kind() != SyntaxKind::MATCH_ARM
         {
             return None;
         }
@@ -411,6 +414,7 @@ impl Unit {
             node.children_with_tokens()
                 .find(|element| match element.kind() {
                     SyntaxKind::WHITESPACE => false,
+
                     SyntaxKind::COMMENT => {
                         let offset = usize::from(element.text_range().start());
 
@@ -419,6 +423,7 @@ impl Unit {
                             .next()
                             .is_some_and(|prefix| prefix.trim().is_empty())
                     }
+
                     _ => true,
                 })?
                 .text_range()
@@ -468,6 +473,7 @@ fn is_list(kind: SyntaxKind) -> bool {
             | SyntaxKind::STMT_LIST
             | SyntaxKind::RECORD_FIELD_LIST
             | SyntaxKind::TUPLE_FIELD_LIST
+            | SyntaxKind::MATCH_ARM_LIST
     )
 }
 
@@ -814,6 +820,98 @@ fn main() {}
     }
 
     #[test]
+    fn multiline_match_arms_are_separated_without_padding_match_braces() {
+        let before = r#"fn main() {
+    match value {
+        First => {
+            first()
+        }
+        Second => second(),
+        Third => third(),
+        Fourth => {
+            fourth()
+        },
+        _ => {
+            last()
+        },
+    }
+}
+"#;
+
+        let after = r#"fn main() {
+    match value {
+        First => {
+            first()
+        }
+
+        Second => second(),
+        Third => third(),
+
+        Fourth => {
+            fourth()
+        },
+
+        _ => {
+            last()
+        },
+    }
+}
+"#;
+
+        check(before, after, MULTILINE);
+        check(before, after, RuleOptions::default());
+        check(before, before, NONE);
+        check(before, before, KINDS);
+    }
+
+    #[test]
+    fn match_arm_spacing_preserves_comments_guards_and_attributes() {
+        check(
+            r#"fn main() {
+    match value {
+        First => first(), // Keep with first.
+        // A guarded arm.
+        #[cfg(ready)]
+        Some(value)
+            if ready => value, // Keep with value.
+        // The fallback.
+        _ => fallback(),
+    }
+}
+"#,
+            r#"fn main() {
+    match value {
+        First => first(), // Keep with first.
+
+        // A guarded arm.
+        #[cfg(ready)]
+        Some(value)
+            if ready => value, // Keep with value.
+
+        // The fallback.
+        _ => fallback(),
+    }
+}
+"#,
+            MULTILINE,
+        );
+
+        check(
+            "fn main() {\r\n\tmatch value {\r\n\t\tFirst => {\r\n\t\t\tfirst()\r\n\t\t}\r\n\t\t_ => fallback(),\r\n\t}\r\n}\r\n",
+            "fn main() {\r\n\tmatch value {\r\n\t\tFirst => {\r\n\t\t\tfirst()\r\n\t\t}\r\n\r\n\t\t_ => fallback(),\r\n\t}\r\n}\r\n",
+            MULTILINE,
+        );
+
+        for source in [
+            "fn main() {\n    match value {\n        First => first(),\n        _ => fallback(),\n    }\n}\n",
+            "fn main() {\n    match value {\n        _ => {\n            fallback()\n        }\n    }\n}\n",
+            "#[rustfmt::skip]\nfn main() {\n    match value {\n        First => {\n            first()\n        }\n        _ => fallback(),\n    }\n}\n",
+        ] {
+            check(source, source, RuleOptions::default());
+        }
+    }
+
+    #[test]
     fn only_multiline_bodies_followed_by_else_are_padded() {
         let before = r#"fn example() {
     if ready {
@@ -1141,6 +1239,7 @@ fn main() {
 
                     consume(copy);
                 }
+
                 None => other(),
             }
 

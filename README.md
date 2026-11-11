@@ -33,7 +33,7 @@ Optional `nitpick.toml`, with all defaults shown:
 
 ```toml
 [whitespace]
-blank_lines_around_multiline = true       # Separate multiline code and fields.
+blank_lines_around_multiline = true       # Separate multiline code, fields, and match arms.
 blank_line_at_end_of_if = true            # Before else when the body has 2+ lines.
 blank_lines_between_trait_methods = true
 blank_lines_between_node_types = true    # Separate different item/statement kinds.

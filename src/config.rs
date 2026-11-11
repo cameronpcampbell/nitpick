@@ -37,6 +37,7 @@ pub fn load(
             toml::from_str::<Configuration>(&contents)
                 .map_err(|error| format!("{}: {error}", path.display()))?
         }
+
         None => Configuration::default(),
     };
 

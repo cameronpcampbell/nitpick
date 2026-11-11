@@ -146,6 +146,7 @@ fn edition(settings: &toml::Table) -> Result<Edition> {
         Some("2018") => Ok(Edition::Edition2018),
         Some("2021") => Ok(Edition::Edition2021),
         Some("2024") => Ok(Edition::Edition2024),
+
         value => Err(Failure::Wrapper(format!(
             "unsupported rustfmt language edition: {value:?}"
         ))),
@@ -587,6 +588,67 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            expected
+        );
+
+        success(&invoke(root, &["--check"], None));
+    }
+
+    #[test]
+    fn project_formatting_separates_multiline_match_arms() {
+        let directory = directory();
+        let root = directory.path();
+
+        let source = r#"fn main() {
+    let configuration = match path {
+        Some(path) => {
+            let contents = read(path);
+
+            parse(contents)
+        }
+        None => default(),
+    };
+}
+"#;
+
+        let expected = r#"fn main() {
+    let configuration = match path {
+        Some(path) => {
+            let contents = read(path);
+
+            parse(contents)
+        }
+
+        None => default(),
+    };
+}
+"#;
+
+        project(
+            root,
+            "[package]\nname = \"arms\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            &[("src/main.rs", source)],
+        );
+
+        let checked = invoke(root, &["--check"], None);
+
+        assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+
+        assert_eq!(
+            fs::read_to_string(root.join("src/main.rs")).unwrap(),
+            source
+        );
+
+        let piped = invoke(root, &["-"], Some(source));
+
+        success(&piped);
+
+        assert_eq!(String::from_utf8(piped.stdout).unwrap(), expected);
+
+        success(&invoke(root, &[], None));
+
+        assert_eq!(
+            fs::read_to_string(root.join("src/main.rs")).unwrap(),
             expected
         );
 

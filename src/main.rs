@@ -12,9 +12,11 @@ fn main() {
 
             2
         }),
+
         cli::Invocation::Format(options) => match format::run(&options) {
             Ok(code) => code,
             Err(format::Failure::Child(code)) => code,
+
             Err(error) => {
                 eprintln!("nitpick: {error}");
 
