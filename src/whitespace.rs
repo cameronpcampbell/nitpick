@@ -7,7 +7,7 @@ use std::ops::Range;
 use serde::Deserialize;
 
 pub use ra_ap_syntax::Edition;
-use ra_ap_syntax::ast::{self, BinaryOp, ElseBranch};
+use ra_ap_syntax::ast::{self, BinaryOp};
 use ra_ap_syntax::{AstNode, SourceFile, SyntaxKind, SyntaxNode, SyntaxToken, TextRange};
 
 /// Each switch controls only the boundaries requested by that rule.
@@ -84,7 +84,6 @@ struct Pass<'src> {
     source: &'src str,
     options: RuleOptions,
     newline: &'static str,
-    indent: String,
     lists: Vec<SyntaxNode>,
     protected: Vec<Range<usize>>,
     edits: Vec<Edit>,
@@ -103,7 +102,6 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
             usize::from(error.range().start()),
             error.to_string(),
         ));
-
     }
 
     let root = parsed.tree().syntax().clone();
@@ -112,7 +110,6 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
         source,
         options,
         newline: newline_convention(&root),
-        indent: indentation_unit(&root),
         lists: Vec::new(),
         protected: Vec::new(),
         edits: Vec::new(),
@@ -130,7 +127,6 @@ pub fn format(source: &str, edition: Edition, options: RuleOptions) -> Result<St
             0,
             "whitespace edits changed Rust syntax",
         ));
-
     }
 
     Ok(output)
@@ -142,34 +138,24 @@ impl Pass<'_> {
             self.protected.push(byte_range(node.text_range()));
 
             return;
-
         }
 
         if node.kind() == SyntaxKind::ATTR {
             self.protected.push(byte_range(node.text_range()));
 
             return;
-
         }
 
         if is_list(node.kind()) {
             self.lists.push(node.clone());
-
         }
 
         if self.options.blank_line_at_end_of_if
             && let Some(branch) = ast::IfExpr::cast(node.clone())
+            && branch.else_branch().is_some()
+            && let Some(block) = branch.then_branch()
         {
-            if let Some(block) = branch.then_branch() {
-                self.layout_branch(&block, true);
-
-            }
-
-            if let Some(ElseBranch::Block(block)) = branch.else_branch() {
-                self.layout_branch(&block, false);
-
-            }
-
+            self.layout_branch(&block);
         }
 
         for element in node.children_with_tokens() {
@@ -185,21 +171,19 @@ impl Pass<'_> {
         }
     }
 
-    fn layout_branch(&mut self, block: &ast::BlockExpr, padded: bool) {
+    fn layout_branch(&mut self, block: &ast::BlockExpr) {
         let Some(list) = block.stmt_list() else {
             return;
         };
 
         if is_skipped(list.syntax()) {
             return;
-
         }
 
         let (Some(open), Some(close)) = (list.l_curly_token(), list.r_curly_token()) else {
             return;
         };
 
-        let start = usize::from(open.text_range().end());
         let end = usize::from(close.text_range().start());
 
         let contents: Vec<_> = list
@@ -217,66 +201,35 @@ impl Pass<'_> {
             return;
         };
 
-        let first = usize::from(first.text_range().start());
-        let last = usize::from(last.text_range().end());
-        let compact = !self.source[start..end].contains('\n');
+        let content_start = first.text_range().start();
+        let content_end = last.text_range().end();
 
-        if !padded && !compact {
+        let multiline = list
+            .syntax()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| {
+                token.text_range().start() >= content_start
+                    && token.text_range().end() <= content_end
+                    && is_layout_newline(&token)
+            });
+
+        if !multiline {
             return;
-
         }
 
-        let base = self.branch_indent(block.syntax());
+        let last = usize::from(last.text_range().end());
+        let base = line_indent(self.source, end);
 
-        if !self.source[start..first].contains('\n') {
-            self.request(
-                start..first,
-                format!("{}{}{}", self.newline, base, self.indent),
-            );
-
-        }
-
-        let lines = if padded {
-            2
-
-        } else {
-            1
-        };
-
-        self.request(last..end, format!("{}{}", self.newline.repeat(lines), base));
-    }
-
-    fn branch_indent(&self, node: &SyntaxNode) -> String {
-        let offset = usize::from(node.text_range().start());
-        let mut base = line_indent(self.source, offset).to_owned();
-
-        // An enclosing compact branch will itself be expanded in this pass.
-        for ancestor in node.ancestors().skip(1) {
-            let Some(list) = ast::StmtList::cast(ancestor) else {
-                continue;
-            };
-
-            let Some(block) = list.syntax().parent().and_then(ast::BlockExpr::cast) else {
-                continue;
-            };
-
-            let is_branch = block
-                .syntax()
-                .parent()
-                .is_some_and(|parent| parent.kind() == SyntaxKind::IF_EXPR);
-
-            if is_branch && !list.syntax().text().to_string().contains('\n') {
-                base.push_str(&self.indent);
-
-            }
-        }
-
-        base
+        self.request(last..end, format!("{}{}", self.newline.repeat(2), base));
     }
 
     fn separate_units(&mut self) {
         for list in self.lists.clone() {
-            let units: Vec<_> = list.children().filter_map(Unit::new).collect();
+            let units: Vec<_> = list
+                .children()
+                .filter_map(|node| Unit::new(node, self.source))
+                .collect();
 
             let in_trait = list.kind() == SyntaxKind::ASSOC_ITEM_LIST
                 && list
@@ -299,7 +252,6 @@ impl Pass<'_> {
 
                 if multiline || methods || kinds {
                     self.separate(left, right);
-
                 }
             }
         }
@@ -315,7 +267,17 @@ impl Pass<'_> {
     }
 
     fn separate(&mut self, left: &Unit, right: &Unit) {
-        let end = usize::from(right.node.text_range().start());
+        // A leading comment can belong to the next node in the syntax tree,
+        // even when it trails the preceding field on the same line.
+        let end = right
+            .node
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| !matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT))
+            .map_or(right.code.start, |token| {
+                usize::from(token.text_range().start())
+            });
+
         let mut start = left.code.end;
         let mut token = left.node.last_token().and_then(|token| token.next_token());
 
@@ -326,18 +288,17 @@ impl Pass<'_> {
 
             if range.start >= end {
                 break;
-
             }
 
             if current.kind() == SyntaxKind::WHITESPACE {
                 if current.text().contains('\n') {
                     break;
-
                 }
 
-            } else if current.kind() == SyntaxKind::COMMENT {
+            } else if current.kind() == SyntaxKind::COMMENT
+                || is_field(left.node.kind()) && current.kind() == SyntaxKind::COMMA
+            {
                 start = range.end;
-
             } else {
                 return;
             }
@@ -348,7 +309,6 @@ impl Pass<'_> {
         let gap_end = token.map_or(end, |token| {
             if token.kind() == SyntaxKind::WHITESPACE {
                 usize::from(token.text_range().end()).min(end)
-
             } else {
                 usize::from(token.text_range().start()).min(end)
             }
@@ -369,7 +329,6 @@ impl Pass<'_> {
     fn request(&mut self, range: Range<usize>, replacement: String) {
         if self.source[range.clone()] != replacement {
             self.edits.push(Edit { range, replacement });
-
         }
     }
 
@@ -402,7 +361,6 @@ impl Pass<'_> {
                     pair[1].range.start,
                     "overlapping whitespace edits",
                 ));
-
             }
         }
 
@@ -419,7 +377,6 @@ impl Pass<'_> {
                     edit.range.start,
                     "unsafe whitespace edit",
                 ));
-
             }
 
             output.replace_range(edit.range, &edit.replacement);
@@ -430,13 +387,13 @@ impl Pass<'_> {
 }
 
 impl Unit {
-    fn new(node: SyntaxNode) -> Option<Self> {
+    fn new(node: SyntaxNode, source: &str) -> Option<Self> {
         if !ast::Item::can_cast(node.kind())
             && !ast::Stmt::can_cast(node.kind())
             && !ast::Expr::can_cast(node.kind())
+            && !is_field(node.kind())
         {
             return None;
-
         }
 
         let code_node = ast::ExprStmt::cast(node.clone())
@@ -450,7 +407,28 @@ impl Unit {
             )
         })?;
 
-        let code = usize::from(first.text_range().start())..usize::from(node.text_range().end());
+        let start = if is_field(node.kind()) {
+            node.children_with_tokens()
+                .find(|element| match element.kind() {
+                    SyntaxKind::WHITESPACE => false,
+                    SyntaxKind::COMMENT => {
+                        let offset = usize::from(element.text_range().start());
+
+                        source[..offset]
+                            .rsplit('\n')
+                            .next()
+                            .is_some_and(|prefix| prefix.trim().is_empty())
+                    }
+                    _ => true,
+                })?
+                .text_range()
+                .start()
+
+        } else {
+            first.text_range().start()
+        };
+
+        let code = usize::from(start)..usize::from(node.text_range().end());
         let kind = classify(&node);
 
         Some(Self { node, code, kind })
@@ -464,7 +442,6 @@ fn classify(node: &SyntaxNode) -> UnitKind {
             .find(|child| ast::Expr::can_cast(child.kind()))
     {
         return classify(&inner);
-
     }
 
     if ast::BinExpr::cast(node.clone())
@@ -472,12 +449,10 @@ fn classify(node: &SyntaxNode) -> UnitKind {
         .is_some_and(|operator| matches!(operator, BinaryOp::Assignment { .. }))
     {
         return UnitKind::Assignment;
-
     }
 
     if matches!(node.kind(), SyntaxKind::MACRO_EXPR | SyntaxKind::MACRO_CALL) {
         return UnitKind::Macro;
-
     }
 
     UnitKind::Syntax(node.kind())
@@ -491,7 +466,13 @@ fn is_list(kind: SyntaxKind) -> bool {
             | SyntaxKind::ASSOC_ITEM_LIST
             | SyntaxKind::EXTERN_ITEM_LIST
             | SyntaxKind::STMT_LIST
+            | SyntaxKind::RECORD_FIELD_LIST
+            | SyntaxKind::TUPLE_FIELD_LIST
     )
+}
+
+fn is_field(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::RECORD_FIELD | SyntaxKind::TUPLE_FIELD)
 }
 
 fn is_skipped(node: &SyntaxNode) -> bool {
@@ -542,47 +523,22 @@ fn newline_convention(root: &SyntaxNode) -> &'static str {
     let newline = root
         .descendants_with_tokens()
         .filter_map(|element| element.into_token())
-        .find(|token| {
-            token.kind() == SyntaxKind::WHITESPACE
-                && token.text().contains('\n')
-                && !token.parent_ancestors().any(|ancestor| {
-                    matches!(ancestor.kind(), SyntaxKind::TOKEN_TREE | SyntaxKind::ATTR)
-                        || is_skipped(&ancestor)
-                })
-        });
+        .find(is_layout_newline);
 
     if newline.is_some_and(|token| token.text().contains("\r\n")) {
         return "\r\n";
-
     }
 
     "\n"
 }
 
-fn indentation_unit(root: &SyntaxNode) -> String {
-    let prefixes: Vec<_> = root
-        .descendants()
-        .filter(|node| {
-            is_list(node.kind()) && !node.ancestors().any(|ancestor| is_skipped(&ancestor))
+fn is_layout_newline(token: &SyntaxToken) -> bool {
+    token.kind() == SyntaxKind::WHITESPACE
+        && token.text().contains('\n')
+        && !token.parent_ancestors().any(|ancestor| {
+            matches!(ancestor.kind(), SyntaxKind::TOKEN_TREE | SyntaxKind::ATTR)
+                || is_skipped(&ancestor)
         })
-        .flat_map(|node| node.children_with_tokens())
-        .filter_map(|element| element.into_token())
-        .filter(|token| token.kind() == SyntaxKind::WHITESPACE)
-        .filter_map(|token| {
-            token
-                .text()
-                .rsplit_once('\n')
-                .map(|(_prefix, indent)| indent.to_owned())
-        })
-        .filter(|indent| !indent.is_empty())
-        .collect();
-
-    if prefixes.iter().any(|indent| indent.starts_with('\t')) {
-        return "\t".to_owned();
-
-    }
-
-    " ".repeat(prefixes.iter().map(String::len).min().unwrap_or(4))
 }
 
 fn tokens(node: &SyntaxNode) -> Vec<(SyntaxKind, String)> {
@@ -724,6 +680,92 @@ mod tests {
     }
 
     #[test]
+    fn multiline_fields_are_separated_with_their_docs_attributes_and_commas() {
+        let before = r#"pub struct Options {
+    pub first: bool,
+    pub second: bool,
+    /// Override all four whitespace rules for this invocation.
+    #[arg(long, value_parser = ["on", "off"])]
+    pub whitespace: Option<String>, // Keep this comment with the field.
+    /// Check formatting without changing files.
+    #[arg(long)]
+    pub check: bool,
+    pub third: bool,
+    pub fourth: bool,
+}
+"#;
+
+        let after = r#"pub struct Options {
+    pub first: bool,
+    pub second: bool,
+
+    /// Override all four whitespace rules for this invocation.
+    #[arg(long, value_parser = ["on", "off"])]
+    pub whitespace: Option<String>, // Keep this comment with the field.
+
+    /// Check formatting without changing files.
+    #[arg(long)]
+    pub check: bool,
+
+    pub third: bool,
+    pub fourth: bool,
+}
+"#;
+
+        check(before, after, MULTILINE);
+        check(before, after, RuleOptions::default());
+        check(before, before, NONE);
+        check(before, before, KINDS);
+    }
+
+    #[test]
+    fn multiline_field_types_cover_named_tuple_and_variant_fields() {
+        let cases = [
+            (
+                "struct Named {\n    first: bool,\n    callback: fn(\n        First,\n        Second,\n    ),\n    last: bool,\n}\n",
+                "struct Named {\n    first: bool,\n\n    callback: fn(\n        First,\n        Second,\n    ),\n\n    last: bool,\n}\n",
+            ),
+            (
+                "struct Tuple(\n    bool,\n    /// A documented field.\n    #[cfg(ready)]\n    String,\n    bool,\n);\n",
+                "struct Tuple(\n    bool,\n\n    /// A documented field.\n    #[cfg(ready)]\n    String,\n\n    bool,\n);\n",
+            ),
+            (
+                "enum Choice {\n    Named {\n        first: bool,\n        #[cfg(ready)]\n        second: bool,\n        third: bool,\n    },\n}\n",
+                "enum Choice {\n    Named {\n        first: bool,\n\n        #[cfg(ready)]\n        second: bool,\n\n        third: bool,\n    },\n}\n",
+            ),
+            (
+                "struct Trailing {\n    /// First.\n    first: bool, // Keep with first.\n    second: bool,\n    third: bool,\n}\n",
+                "struct Trailing {\n    /// First.\n    first: bool, // Keep with first.\n\n    second: bool,\n    third: bool,\n}\n",
+            ),
+        ];
+
+        for (before, after) in cases {
+            check(before, after, MULTILINE);
+            check(before, before, NONE);
+        }
+    }
+
+    #[test]
+    fn field_padding_preserves_list_edges_skip_regions_and_expression_fields() {
+        let sources = [
+            "struct Single {\n    /// The only field.\n    #[cfg(ready)]\n    value: bool,\n}\n",
+            "#[rustfmt::skip]\nstruct Skipped {\n    first: bool,\n    #[cfg(ready)]\n    second: bool,\n}\n",
+            "struct SkippedField {\n    #[rustfmt::skip]\n    callback: fn( First,\n      Second ),\n}\n",
+            "struct Plain {\n    first: bool,\n    second: bool,\n}\n",
+            "fn main() {\n    let value = Value {\n        first: build(\n            argument,\n        ),\n        second: true,\n    };\n}\n",
+        ];
+
+        for source in sources {
+            check(source, source, MULTILINE);
+        }
+
+        let before = "struct Fields {\r\n\tfirst: bool,\r\n\t/// Documented.\r\n\tsecond: bool,\r\n\tthird: bool,\r\n}\r\n";
+        let after = "struct Fields {\r\n\tfirst: bool,\r\n\r\n\t/// Documented.\r\n\tsecond: bool,\r\n\r\n\tthird: bool,\r\n}\r\n";
+
+        check(before, after, MULTILINE);
+    }
+
+    #[test]
     fn kinds_unwrap_statements_and_parentheses_and_group_assignments() {
         check(
             r#"fn example() {
@@ -772,97 +814,83 @@ fn main() {}
     }
 
     #[test]
-    fn if_chains_keep_else_attached_and_preserve_values() {
-        check(
-            r#"fn example() {
+    fn only_multiline_bodies_followed_by_else_are_padded() {
+        let before = r#"fn example() {
     if ready {
         prepare();
+        confirm();
     } else if waiting {
         pause();
+        retry();
     } else {
         finish();
+        close();
     }
 }
-"#,
-            r#"fn example() {
+"#;
+
+        let after = r#"fn example() {
     if ready {
         prepare();
+        confirm();
 
     } else if waiting {
         pause();
+        retry();
 
     } else {
         finish();
+        close();
     }
 }
-"#,
-            BRANCHES,
-        );
+"#;
+
+        check(before, after, BRANCHES);
+        check(before, before, NONE);
 
         check(
-            r#"fn value() -> i32 {
-    if let Some(value) = input {
-        value // Keep this value.
-    } else {
-        if ready {
-            2
-        } else {
-            3
-        }
-    }
-}
-"#,
-            r#"fn value() -> i32 {
-    if let Some(value) = input {
-        value // Keep this value.
-
-    } else {
-        if ready {
-            2
-
-        } else {
-            3
-        }
-    }
-}
-"#,
+            "fn main() {\n    if ready {\n        first();\n        second();\n    } else if waiting {\n        third();\n        fourth();\n    }\n}\n",
+            "fn main() {\n    if ready {\n        first();\n        second();\n\n    } else if waiting {\n        third();\n        fourth();\n    }\n}\n",
             BRANCHES,
         );
     }
 
     #[test]
-    fn compact_branches_expand_and_affect_multiline_on_the_first_pass() {
-        check(
-            r#"fn main() {
-    let first = 0;
-    let value = if ready { 1 } else if waiting { 2 } else { 3 };
-    let last = 4;
+    fn compact_and_one_line_bodies_stay_unpadded() {
+        let sources = [
+            "fn main() {\n    let first = 0;\n    let value = if ready { 1 } else if waiting { 2 } else { 3 };\n    let last = 4;\n}\n",
+            "fn main() {\n    let prefix_length = if parsed.command.is_some() { 2 } else { 1 };\n}\n",
+            "fn main() {\n    let expected = if case[0] == \"rustfmt\" {\n        &case[1..]\n    } else {\n        &case\n    };\n}\n",
+            "fn main() {\n    if ready { work(); }\n    if waiting {} else if ready { /* Wait. */ } else {}\n}\n",
+            "fn main() {\n    if ready {\n        work(); // Keep this comment.\n    } else if waiting {\n        pause();\n    } else {\n        finish();\n    }\n}\n",
+            "fn main() {\n    if ready {\n        // Nothing yet.\n    } else {\n        work();\n    }\n}\n",
+            "fn main() {\n    if ready {\n\n        work();\n    } else {\n        finish();\n    }\n}\n",
+            r##"fn main() {
+    let value = if ready { r#"first
+second"# } else { "" };
 }
-"#,
-            r#"fn main() {
-    let first = 0;
+"##,
+            "fn main() {\n    if ready { opaque! {\n        tokens\n    } } else { work(); }\n}\n",
+        ];
 
-    let value = if ready {
-        1
+        for source in sources {
+            check(source, source, BRANCHES);
+            check(source, source, RuleOptions::default());
+        }
+    }
 
-    } else if waiting {
-        2
+    #[test]
+    fn standalone_ifs_stay_unpadded_regardless_of_body_length() {
+        let sources = [
+            "fn main() {\n    if output.status.success() {\n        result.map_err(|error| at_path(Path::new(\"<stdin>\"), error))?;\n    }\n}\n",
+            "fn main() {\n    if ready {\n        first();\n        second();\n    }\n}\n",
+            "fn main() {\n    if ready {\n        if waiting {\n            first();\n            second();\n        }\n    }\n}\n",
+            "fn main() {\n    if ready {\n\n        work();\n\n    }\n}\n",
+        ];
 
-    } else {
-        3
-    };
-
-    let last = 4;
-}
-"#,
-            RuleOptions::default(),
-        );
-
-        check(
-            "fn main() {\n    if ready {} else if waiting { /* Wait. */ } else {}\n    if ready {\n        // Nothing yet.   \n    }\n}\n",
-            "fn main() {\n    if ready {} else if waiting {\n        /* Wait. */\n\n    } else {}\n    if ready {\n        // Nothing yet.   \n\n    }\n}\n",
-            BRANCHES,
-        );
+        for source in sources {
+            check(source, source, BRANCHES);
+        }
     }
 
     #[test]
@@ -1013,8 +1041,8 @@ fn main() {
     #[test]
     fn newline_indentation_file_edges_and_disabled_rules_are_preserved() {
         check(
-            "fn main() {\r\n\tlet café = 0;\r\n\tlet value = if ready { café } else { 2 };\r\n\tconsume(value);\r\n}",
-            "fn main() {\r\n\tlet café = 0;\r\n\r\n\tlet value = if ready {\r\n\t\tcafé\r\n\r\n\t} else {\r\n\t\t2\r\n\t};\r\n\r\n\tconsume(value);\r\n}",
+            "fn main() {\r\n\tlet café = 0;\r\n\tlet value = if ready {\r\n\t\t// Preserve the value.\r\n\t\tcafé\r\n\t} else {\r\n\t\t2\r\n\t};\r\n\tconsume(value);\r\n}",
+            "fn main() {\r\n\tlet café = 0;\r\n\r\n\tlet value = if ready {\r\n\t\t// Preserve the value.\r\n\t\tcafé\r\n\r\n\t} else {\r\n\t\t2\r\n\t};\r\n\r\n\tconsume(value);\r\n}",
             RuleOptions::default(),
         );
 
@@ -1196,38 +1224,16 @@ fn main() {
     }
 
     #[test]
-    fn nested_branch_expansion_and_standalone_ifs_have_no_extra_scope_padding() {
+    fn nested_chains_pad_only_their_own_multiline_bodies() {
         check(
-            r#"fn main() {
-    if ready {
-        if waiting {
-            pause();
-        }
-    }
-    if ready { 1 } else { if waiting { 2 } else { 3 } };
-}
-"#,
-            r#"fn main() {
-    if ready {
-        if waiting {
-            pause();
+            "fn main() {\n    if ready {\n        if waiting {\n            first();\n            second();\n        } else {\n            finish();\n        }\n    } else {\n        other();\n    }\n}\n",
+            "fn main() {\n    if ready {\n        if waiting {\n            first();\n            second();\n\n        } else {\n            finish();\n        }\n\n    } else {\n        other();\n    }\n}\n",
+            BRANCHES,
+        );
 
-        }
-
-    }
-    if ready {
-        1
-
-    } else {
-        if waiting {
-            2
-
-        } else {
-            3
-        }
-    };
-}
-"#,
+        check(
+            "fn main() {\n    if ready { 1 } else if waiting {\n        prepare();\n        2\n    } else { 3 };\n    if ready {\n        if waiting { 2 } else { 3 }\n    }\n}\n",
+            "fn main() {\n    if ready { 1 } else if waiting {\n        prepare();\n        2\n\n    } else { 3 };\n    if ready {\n        if waiting { 2 } else { 3 }\n    }\n}\n",
             BRANCHES,
         );
     }
@@ -1235,7 +1241,7 @@ fn main() {
     #[test]
     fn opaque_contents_are_protected_including_their_whitespace() {
         let before = "#[rustfmt::skip]\nmod untouched { fn main(){if ready { value }; let x=1; call(x);} }\nmacro_rules! untouched { () => { if ready { value } else { other } } }\nfn main() {\n    opaque! {\n\t\tif ready { value } else { other }\n\n\n    };\n    let value = if ready { 1 } else { 2 };\n    #[rustfmt::skip]\n    let skipped = ||{ if ready { value }; call();};\n}\n";
-        let after = "#[rustfmt::skip]\nmod untouched { fn main(){if ready { value }; let x=1; call(x);} }\n\nmacro_rules! untouched { () => { if ready { value } else { other } } }\n\nfn main() {\n    opaque! {\n\t\tif ready { value } else { other }\n\n\n    };\n\n    let value = if ready {\n        1\n\n    } else {\n        2\n    };\n\n    #[rustfmt::skip]\n    let skipped = ||{ if ready { value }; call();};\n}\n";
+        let after = "#[rustfmt::skip]\nmod untouched { fn main(){if ready { value }; let x=1; call(x);} }\n\nmacro_rules! untouched { () => { if ready { value } else { other } } }\n\nfn main() {\n    opaque! {\n\t\tif ready { value } else { other }\n\n\n    };\n\n    let value = if ready { 1 } else { 2 };\n    #[rustfmt::skip]\n    let skipped = ||{ if ready { value }; call();};\n}\n";
 
         check(before, after, RuleOptions::default());
     }
@@ -1271,24 +1277,26 @@ fn main() {
         check(
             r#"fn main() {
     if ready {
+        work();
         /* The last content. */
-    }
-    if waiting {
+    } else if waiting {
+        prepare();
         work(); // Keep this comment.
 
 
-    }
+    } else {}
 }
 "#,
             r#"fn main() {
     if ready {
+        work();
         /* The last content. */
 
-    }
-    if waiting {
+    } else if waiting {
+        prepare();
         work(); // Keep this comment.
 
-    }
+    } else {}
 }
 "#,
             BRANCHES,
@@ -1331,13 +1339,13 @@ fn main() {
     fn layout_ignores_newlines_and_indentation_inside_literals_and_macros() {
         check(
             "fn main() {\n    let text = r#\"α\r\n\tcharacters\"#;\n    let value = if ready { 1 } else { 2 };\n}\n",
-            "fn main() {\n    let text = r#\"α\r\n\tcharacters\"#;\n\n    let value = if ready {\n        1\n\n    } else {\n        2\n    };\n}\n",
+            "fn main() {\n    let text = r#\"α\r\n\tcharacters\"#;\n\n    let value = if ready { 1 } else { 2 };\n}\n",
             RuleOptions::default(),
         );
 
         check(
             "macro_rules! opaque { () => {\r\n\tignored\r\n} }\nfn main() {\n  if ready { value };\n}\n",
-            "macro_rules! opaque { () => {\r\n\tignored\r\n} }\n\nfn main() {\n  if ready {\n    value\n\n  };\n}\n",
+            "macro_rules! opaque { () => {\r\n\tignored\r\n} }\n\nfn main() {\n  if ready { value };\n}\n",
             RuleOptions::default(),
         );
     }

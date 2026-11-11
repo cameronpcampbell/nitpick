@@ -53,7 +53,6 @@ mod tests {
     fn binary() -> PathBuf {
         if let Some(binary) = option_env!("CARGO_BIN_EXE_nitpick") {
             return binary.into();
-
         }
 
         // Cargo also checks the binary's test target under --all-targets.

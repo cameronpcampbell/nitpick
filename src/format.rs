@@ -3,11 +3,14 @@
 #[path = "staging.rs"]
 mod staging;
 
+#[path = "project.rs"]
+mod project;
+
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -55,7 +58,6 @@ fn capture(arguments: &[OsString], input: Option<&[u8]>) -> Result<Output> {
         .args(arguments)
         .stdin(if input.is_some() {
             Stdio::piped()
-
         } else {
             Stdio::null()
         })
@@ -87,9 +89,7 @@ fn capture(arguments: &[OsString], input: Option<&[u8]>) -> Result<Output> {
 
         if output.status.success() {
             result.map_err(|error| at_path(Path::new("<stdin>"), error))?;
-
         }
-
     }
 
     Ok(output)
@@ -106,12 +106,10 @@ fn check_child(output: &Output, stage: Option<&Stage>, source_stdout: bool) -> R
 
     if !source_stdout {
         eprint!("{}", normalize(&output.stdout));
-
     }
 
     if !output.status.success() {
         return Err(Failure::Child(output.status.code().unwrap_or(1)));
-
     }
 
     Ok(())
@@ -130,7 +128,6 @@ fn settings(options: &Options, path: &Path) -> Result<toml::Table> {
 
     if !output.status.success() {
         check_child(&output, None, false)?;
-
     }
 
     let contents = String::from_utf8(output.stdout).map_err(|error| at_path(path, error))?;
@@ -179,44 +176,68 @@ pub fn run(options: &Options) -> Result<i32> {
         eprintln!("Invalid to use `--emit` and `--check`");
 
         return Ok(1);
-
     }
 
     if options.verbose && options.quiet {
         eprintln!("Can't use both `--verbose` and `--quiet`");
 
         return Ok(1);
-
     }
 
     if options.emit.len() > 1 {
         eprintln!("Option 'emit' given more than once");
 
         return Ok(1);
-
     }
 
-    if options.files.is_empty() {
-        return stdin(options);
+    if options.files.iter().any(|path| path == Path::new("-")) {
+        if options.files.len() != 1 {
+            return Err(Failure::Wrapper(
+                "stdin (-) cannot be combined with source file paths".into(),
+            ));
+        }
 
+        return stdin(options, &read_stdin()?);
     }
 
-    files(options)
+    if !options.files.is_empty() {
+        return files(options);
+    }
+
+    if !io::stdin().is_terminal() {
+        let input = read_stdin()?;
+
+        if !input.is_empty() {
+            return stdin(options, &input);
+        }
+    }
+
+    let mut code = 0;
+
+    for group in project::discover(options)? {
+        code |= files(&group)?;
+    }
+
+    Ok(code)
 }
 
-fn stdin(options: &Options) -> Result<i32> {
+fn read_stdin() -> Result<Vec<u8>> {
+    let mut input = Vec::new();
+
+    io::stdin()
+        .read_to_end(&mut input)
+        .map_err(|error| at_path(Path::new("<stdin>"), error))?;
+
+    Ok(input)
+}
+
+fn stdin(options: &Options, original: &[u8]) -> Result<i32> {
     let path = env::current_dir()
         .map_err(|error| at_path(Path::new("."), error))?
         .join("<stdin>");
 
     let effective = settings(options, &path)?;
     let language = edition(&effective)?;
-    let mut original = Vec::new();
-
-    io::stdin()
-        .read_to_end(&mut original)
-        .map_err(|error| at_path(&path, error))?;
-
     let mut arguments = options.rustfmt_arguments();
 
     arguments.extend([
@@ -226,7 +247,7 @@ fn stdin(options: &Options) -> Result<i32> {
         "emit_mode=Stdout,make_backup=false".into(),
     ]);
 
-    let output = capture(&arguments, Some(&original))?;
+    let output = capture(&arguments, Some(original))?;
 
     check_child(&output, None, true)?;
 
@@ -235,8 +256,7 @@ fn stdin(options: &Options) -> Result<i32> {
         .and_then(toml::Value::as_bool)
         == Some(true)
     {
-        &original
-
+        original
     } else {
         &output.stdout
     };
@@ -247,14 +267,11 @@ fn stdin(options: &Options) -> Result<i32> {
     if options.check {
         if changed && options.files_with_diff {
             println!("<stdin>");
-
         } else if changed {
-            print_diff(Path::new("<stdin>"), &original, &final_source)?;
-
+            print_diff(Path::new("<stdin>"), original, &final_source)?;
         }
 
         return Ok(i32::from(changed));
-
     }
 
     io::stdout()
@@ -302,10 +319,8 @@ fn files(options: &Options) -> Result<i32> {
         if options.check {
             if differs && options.files_with_diff {
                 println!("{}", snapshot.path.display());
-
             } else if differs {
                 print_diff(&snapshot.path, &snapshot.original, &final_source)?;
-
             }
 
         } else if stdout {
@@ -323,9 +338,7 @@ fn files(options: &Options) -> Result<i32> {
 
             if options.files_with_diff {
                 println!("{}", snapshot.path.display());
-
             }
-
         }
     }
 
@@ -350,7 +363,6 @@ fn replace(snapshot: &Snapshot, contents: &[u8], backup: bool) -> Result<()> {
 
     if snapshot.permissions.readonly() {
         return Err(at_path(path, "source is read-only"));
-
     }
 
     let mut temporary = NamedTempFile::new_in(path.parent().expect("absolute source path"))
@@ -377,7 +389,6 @@ fn replace(snapshot: &Snapshot, contents: &[u8], backup: bool) -> Result<()> {
 
         if backup_path == *path {
             return Err(at_path(path, "backup path would overwrite the source"));
-
         }
 
         let mut saved = NamedTempFile::new_in(path.parent().expect("absolute source path"))
@@ -395,7 +406,6 @@ fn replace(snapshot: &Snapshot, contents: &[u8], backup: bool) -> Result<()> {
         saved
             .persist(&backup_path)
             .map_err(|error| at_path(&backup_path, error))?;
-
     }
 
     snapshot.verify()?;
@@ -423,7 +433,6 @@ mod tests {
     fn binary() -> PathBuf {
         if let Some(binary) = option_env!("CARGO_BIN_EXE_nitpick") {
             return binary.into();
-
         }
 
         env::current_exe()
@@ -445,7 +454,6 @@ mod tests {
             .args(arguments)
             .stdin(if input.is_some() {
                 Stdio::piped()
-
             } else {
                 Stdio::null()
             })
@@ -461,7 +469,6 @@ mod tests {
                 .unwrap()
                 .write_all(input.as_bytes())
                 .unwrap();
-
         }
 
         child.wait_with_output().unwrap()
@@ -476,11 +483,347 @@ mod tests {
         );
     }
 
+    fn project(directory: &Path, manifest: &str, sources: &[(&str, &str)]) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(directory.join("Cargo.toml"), manifest).unwrap();
+
+        for (path, source) in sources {
+            let path = directory.join(path);
+
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, source).unwrap();
+        }
+    }
+
+    #[test]
+    fn no_arguments_formats_all_cargo_targets_and_modules() {
+        let directory = directory();
+        let root = directory.path();
+
+        let sources = [
+            (
+                "src/lib.rs",
+                "mod child;\npub async fn library(){if true{call();}}\n",
+            ),
+            ("src/child.rs", "fn child(){if true{call();}}\n"),
+            ("src/main.rs", SOURCE),
+            ("src/bin/extra.rs", SOURCE),
+            ("tests/integration.rs", SOURCE),
+            ("examples/demo.rs", SOURCE),
+            ("benches/speed.rs", SOURCE),
+            ("build.rs", SOURCE),
+        ];
+
+        project(
+            root,
+            "[package]\nname = \"project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            &sources,
+        );
+
+        fs::write(
+            root.join("unrelated.rs"),
+            "invalid Rust that must not be read",
+        )
+        .unwrap();
+
+        let checked = invoke(root, &["--check", "--files-with-diff"], None);
+
+        assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+
+        let names = String::from_utf8(checked.stdout).unwrap();
+
+        for (path, original) in sources {
+            assert!(names.contains(root.join(path).canonicalize().unwrap().to_str().unwrap()));
+            assert_eq!(fs::read_to_string(root.join(path)).unwrap(), original);
+        }
+
+        let preview = invoke(root, &["--emit", "stdout"], None);
+
+        success(&preview);
+
+        for (path, original) in sources {
+            assert_eq!(fs::read_to_string(root.join(path)).unwrap(), original);
+        }
+
+        success(&invoke(root, &[], None));
+
+        for (path, original) in sources {
+            let formatted = fs::read_to_string(root.join(path)).unwrap();
+
+            assert_ne!(formatted, original, "{path}");
+        }
+
+        success(&invoke(root, &["--check"], None));
+
+        assert_eq!(
+            fs::read_to_string(root.join("unrelated.rs")).unwrap(),
+            "invalid Rust that must not be read"
+        );
+    }
+
+    #[test]
+    fn project_formatting_separates_multiline_fields() {
+        let directory = directory();
+        let root = directory.path();
+        let source = "pub struct Options {\n    /// Override whitespace rules.\n    #[arg(long)]\n    pub whitespace: Option<String>,\n    /// Check formatting without changing files.\n    #[arg(long)]\n    pub check: bool,\n}\n";
+
+        let expected = source.replace(
+            "Option<String>,\n    /// Check",
+            "Option<String>,\n\n    /// Check",
+        );
+
+        project(
+            root,
+            "[package]\nname = \"fields\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            &[("src/lib.rs", source)],
+        );
+
+        let checked = invoke(root, &["--check"], None);
+
+        assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), source);
+
+        success(&invoke(root, &[], None));
+
+        assert_eq!(
+            fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            expected
+        );
+
+        success(&invoke(root, &["--check"], None));
+    }
+
+    #[test]
+    fn workspace_discovery_respects_package_location_editions_and_configs() {
+        let directory = directory();
+        let root = directory.path();
+
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"legacy\", \"modern\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+
+        let legacy = root.join("legacy");
+        let modern = root.join("modern");
+        let legacy_source = "pub fn async(){if true{call();}}\n";
+        let modern_source = "pub async fn modern(){if true{call();}}\n";
+
+        project(
+            &legacy,
+            "[package]\nname = \"legacy\"\nversion = \"0.1.0\"\nedition = \"2015\"\n",
+            &[("src/lib.rs", legacy_source)],
+        );
+
+        project(
+            &modern,
+            "[package]\nname = \"modern\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            &[("src/lib.rs", modern_source)],
+        );
+
+        fs::write(modern.join("rustfmt.toml"), "hard_tabs = true\n").unwrap();
+
+        fs::write(
+            modern.join("nitpick.toml"),
+            "[whitespace]\nblank_line_at_end_of_if = false\n",
+        )
+        .unwrap();
+
+        let checked = invoke(root, &["--check", "--files-with-diff"], None);
+
+        assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+
+        let names = String::from_utf8(checked.stdout).unwrap();
+
+        assert!(names.contains("legacy/src/lib.rs"));
+        assert!(names.contains("modern/src/lib.rs"));
+
+        success(&invoke(&modern.join("src"), &[], None));
+
+        assert_eq!(
+            fs::read_to_string(legacy.join("src/lib.rs")).unwrap(),
+            legacy_source
+        );
+
+        let modern_formatted = fs::read_to_string(modern.join("src/lib.rs")).unwrap();
+
+        assert!(modern_formatted.contains("\t\tcall();\n\t}\n"));
+
+        let checked = invoke(root, &["--check", "--files-with-diff"], None);
+
+        assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+        assert!(!String::from_utf8_lossy(&checked.stdout).contains("modern/src/lib.rs"));
+
+        success(&invoke(root, &[], None));
+        success(&invoke(root, &["--check"], None));
+    }
+
+    #[test]
+    fn stdin_and_explicit_files_take_precedence_over_project_discovery() {
+        let directory = directory();
+        let root = directory.path();
+
+        project(
+            root,
+            "[package]\nname = \"project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            &[("src/main.rs", SOURCE), ("separate.rs", SOURCE)],
+        );
+
+        let piped = invoke(root, &[], Some(SOURCE));
+        let explicit = invoke(root, &["-"], Some(SOURCE));
+        let empty = invoke(root, &["-"], Some(""));
+
+        success(&piped);
+        success(&explicit);
+        success(&empty);
+
+        assert_eq!(piped.stdout, explicit.stdout);
+
+        assert_eq!(
+            fs::read_to_string(root.join("src/main.rs")).unwrap(),
+            SOURCE
+        );
+
+        let invalid = invoke(root, &["-", "separate.rs"], Some(SOURCE));
+
+        assert_eq!(invalid.status.code(), Some(2));
+
+        assert_eq!(
+            fs::read_to_string(root.join("separate.rs")).unwrap(),
+            SOURCE
+        );
+
+        success(&invoke(root, &["separate.rs"], None));
+
+        assert_ne!(
+            fs::read_to_string(root.join("separate.rs")).unwrap(),
+            SOURCE
+        );
+
+        assert_eq!(
+            fs::read_to_string(root.join("src/main.rs")).unwrap(),
+            SOURCE
+        );
+    }
+
+    #[test]
+    fn project_discovery_reports_missing_and_invalid_manifests() {
+        let directory = directory();
+        let root = directory.path();
+        let missing = invoke(root, &[], None);
+
+        assert_eq!(missing.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&missing.stderr).contains("no Cargo.toml found"));
+
+        fs::write(root.join("Cargo.toml"), "[invalid").unwrap();
+
+        let invalid = invoke(root, &[], None);
+
+        assert_eq!(invalid.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&invalid.stderr).contains("cargo metadata failed"));
+
+        success(&invoke(root, &["-"], Some(SOURCE)));
+    }
+
+    #[test]
+    fn compact_if_expressions_stay_compact_through_files_and_stdin() {
+        let directory = directory();
+        let root = directory.path();
+        let path = root.join("main.rs");
+        let source = "fn main() {\n    let prefix_length = if parsed.command.is_some() {\n        2\n\n    } else {\n        1\n    };\n}\n";
+
+        let expected = "fn main() {\n    let prefix_length = if parsed.command.is_some() { 2 } else { 1 };\n}\n";
+
+        fs::write(&path, source).unwrap();
+
+        let piped = invoke(root, &[], Some(source));
+
+        success(&piped);
+
+        assert_eq!(piped.stdout, expected.as_bytes());
+
+        success(&invoke(root, &["main.rs"], None));
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+
+        success(&invoke(root, &["--check", "main.rs"], None));
+    }
+
+    #[test]
+    fn branch_padding_requires_multiple_body_lines_and_a_following_else() {
+        let directory = directory();
+        let root = directory.path();
+        let path = root.join("main.rs");
+
+        let source = r#"fn main() {
+    let expected = if case[0] == "rustfmt" {
+        &case[1..]
+    } else {
+        &case
+    };
+    if output.status.success() {
+        result.map_err(|error| at_path(Path::new("<stdin>"), error))?;
+    }
+    if ready {
+        first();
+        second();
+    }
+    if waiting {
+        first();
+        second();
+    } else {
+        other();
+    }
+}
+"#;
+
+        let expected = r#"fn main() {
+    let expected = if case[0] == "rustfmt" {
+        &case[1..]
+    } else {
+        &case
+    };
+
+    if output.status.success() {
+        result.map_err(|error| at_path(Path::new("<stdin>"), error))?;
+    }
+
+    if ready {
+        first();
+        second();
+    }
+
+    if waiting {
+        first();
+        second();
+
+    } else {
+        other();
+    }
+}
+"#;
+
+        fs::write(&path, source).unwrap();
+
+        let piped = invoke(root, &[], Some(source));
+
+        success(&piped);
+
+        assert_eq!(piped.stdout, expected.as_bytes());
+
+        success(&invoke(root, &["main.rs"], None));
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+
+        success(&invoke(root, &["--check", "main.rs"], None));
+    }
+
     #[test]
     fn combined_check_compares_final_style_without_writing() {
         let directory = directory();
         let path = directory.path().join("main.rs");
-        let upstream = invoke(directory.path(), &["rustfmt"], Some(SOURCE));
+        let source = "fn main(){if ready{first();second();}else{third();}}\n";
+        let upstream = invoke(directory.path(), &["rustfmt"], Some(source));
 
         success(&upstream);
 
@@ -536,7 +879,6 @@ mod tests {
 
                 let flags = if configuration.is_empty() {
                     Vec::new()
-
                 } else {
                     vec!["--config", configuration]
                 };
@@ -664,11 +1006,15 @@ mod tests {
 
         fs::write(
             root.join("lib.rs"),
-            "mod child;\nfn main(){if true{call();}}\n",
+            "mod child;\nfn main(){if true{call(); finish();} else {other();}}\n",
         )
         .unwrap();
 
-        fs::write(root.join("child/mod.rs"), "fn child(){if true{call();}}\n").unwrap();
+        fs::write(
+            root.join("child/mod.rs"),
+            "fn child(){if true{call(); finish();} else {other();}}\n",
+        )
+        .unwrap();
 
         let file = root.join("lib.rs");
         let child = root.join("child/mod.rs");
@@ -694,12 +1040,12 @@ mod tests {
             1
         );
 
-        assert!(contents.contains("\t\tcall();\n\t}\n"));
-        assert!(contents.contains("\t\tcall();\n\n\t}\n"));
+        assert!(contents.contains("\t\tfinish();\n\t} else {"));
+        assert!(contents.contains("\t\tfinish();\n\n\t} else {"));
 
         assert_eq!(
             fs::read_to_string(&child).unwrap(),
-            "fn child(){if true{call();}}\n"
+            "fn child(){if true{call(); finish();} else {other();}}\n"
         );
 
         fs::write(
@@ -721,22 +1067,25 @@ mod tests {
         let stdin = invoke(
             &root.join("outside"),
             &flags,
-            Some("fn main(){if true{call();}}\n"),
+            Some("fn main(){if true{call(); finish();} else {other();}}\n"),
         );
 
         success(&stdin);
 
-        assert!(String::from_utf8_lossy(&stdin.stdout).contains("  if true {\n    call();\n  }"));
+        assert!(
+            String::from_utf8_lossy(&stdin.stdout)
+                .contains("  if true {\n    call();\n    finish();\n  } else {")
+        );
 
         let forced = invoke(
             &root.join("outside"),
             &[&flags[..], &["--whitespace", "on"]].concat(),
-            Some("fn main(){if true{call();}}\n"),
+            Some("fn main(){if true{call(); finish();} else {other();}}\n"),
         );
 
         success(&forced);
 
-        assert!(String::from_utf8_lossy(&forced.stdout).contains("    call();\n\n  }"));
+        assert!(String::from_utf8_lossy(&forced.stdout).contains("    finish();\n\n  } else {"));
 
         fs::write(root.join("other.rs"), SOURCE).unwrap();
         fs::write(root.join("child/other.rs"), SOURCE).unwrap();
@@ -1025,12 +1374,7 @@ mod tests {
                 .env("NITPICK_RUSTFMT", &executable)
                 .env("TEST_REAL_RUSTFMT", real.trim())
                 .env("TEST_ORIGINAL", &path)
-                .env("TEST_CHILD_FAILURE", if failure {
-                    "yes"
-
-                } else {
-                    "no"
-                })
+                .env("TEST_CHILD_FAILURE", if failure { "yes" } else { "no" })
                 .output()
                 .unwrap();
 
@@ -1048,7 +1392,6 @@ mod tests {
 
             if !failure {
                 assert!(String::from_utf8_lossy(&output.stderr).contains("source changed"));
-
             }
         }
     }

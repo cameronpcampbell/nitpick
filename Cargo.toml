@@ -25,6 +25,7 @@ path = "src/format.rs"
 clap = { version = "4", features = ["derive"] }
 ra_ap_syntax = "=0.0.349"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 similar = "2"
 tempfile = "3"
 toml = "0.9"

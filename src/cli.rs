@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::error::{ContextKind, ContextValue};
 use clap::{Parser, Subcommand};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(
     name = "nitpick",
     version,
@@ -67,7 +67,7 @@ pub struct Options {
     #[arg(short, long)]
     pub quiet: bool,
 
-    /// Files to format. Read stdin when omitted.
+    /// Files to format. Default to the Cargo project, or piped source. Use - for stdin.
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
@@ -75,7 +75,7 @@ pub struct Options {
     command: Option<Commands>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 enum Commands {
     /// Forward all following arguments directly to rustfmt.
     #[command(disable_help_flag = true, disable_version_flag = true)]
@@ -102,7 +102,6 @@ pub fn invocation(
 
     if options.command.is_some() {
         return Ok(Invocation::Rustfmt(arguments.into_iter().skip(2).collect()));
-
     }
 
     Ok(Invocation::Format(Box::new(options)))
@@ -152,12 +151,7 @@ fn parse_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Vec<OsStr
     let arguments: Vec<_> = arguments.into_iter().collect();
     let parsed = parse_options(&arguments)?;
 
-    let prefix_length = if parsed.command.is_some() {
-        2
-
-    } else {
-        1
-    };
+    let prefix_length = if parsed.command.is_some() { 2 } else { 1 };
 
     // Retain the original spelling, ordering, and delimiters after validation.
     Ok(arguments.into_iter().skip(prefix_length).collect())
@@ -166,7 +160,6 @@ fn parse_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Vec<OsStr
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use clap::error::ErrorKind;
 
     #[cfg(unix)]
@@ -359,7 +352,6 @@ mod tests {
 
             let expected = if case[0] == "rustfmt" {
                 &case[1..]
-
             } else {
                 &case
             };

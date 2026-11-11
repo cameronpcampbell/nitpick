@@ -4,18 +4,35 @@ Nitpick runs the installed `rustfmt`, then adds configurable blank lines. Build
 it with `cargo build --release`. A Rust toolchain with rustfmt must be installed.
 
 ```sh
+nitpick
+nitpick --check
 nitpick src/main.rs src/lib.rs
 cat src/main.rs | nitpick
-nitpick --check src/main.rs
+nitpick - < src/main.rs
 nitpick --emit stdout --edition 2024 src/main.rs
 ```
+
+Run `nitpick` from a Cargo project to format its targets and their modules.
+Running from the workspace root includes every workspace member. Running from
+a member package, or one of its subdirectories, selects that package. Discovery
+uses `cargo metadata --no-deps --offline` and does not build the project or include
+external dependencies. Binary, library, test, example, benchmark, and build script
+targets are included. Unrelated Rust files are left alone.
+
+Nonempty piped input selects stdin formatting instead of project discovery.
+Use `-` to explicitly read stdin, including empty input. With no file arguments
+and empty redirected input, Nitpick formats the Cargo project. Explicit file
+paths select only those files and their modules.
 
 The whitespace pass has four rules, all enabled by default:
 
 - Separate multiline declarations, blocks, assignments, and expressions from
-  neighboring items or statements with a blank line.
-- Add a blank line at the end of each nonempty `if` or `else if` then-block.
-  The final `else` block does not need this padding.
+  neighboring items or statements with a blank line. Separate multiline field
+  declarations from neighboring fields too, including their doc comments and
+  attributes. Consecutive single-line fields stay together.
+- Add a blank line before `else` when the preceding `if` or `else if` body has
+  more than one nonblank line. The braces do not count. Compact branches,
+  bodies with one line, and branches without an `else` stay unpadded.
 - Put a blank line between trait methods, including methods without bodies.
 - Put a blank line between neighboring nodes of different kinds. Consecutive
   single-line variable declarations can stay together. A following call needs
@@ -56,9 +73,10 @@ rule's requests or erase existing whitespace in the custom pass. Configuration
 errors still count when an override is supplied.
 
 `--config-path` and `--config` belong to rustfmt. Nitpick never sends its own
-settings to rustfmt. The language edition follows rustfmt's effective settings,
-including inline overrides. Direct rustfmt defaults to Rust 2015, independently
-of Cargo's package edition. `--style-edition` selects style rather than language.
+settings to rustfmt. Project discovery supplies each Cargo target's language
+edition. Explicit file and stdin invocations follow rustfmt's effective settings,
+which default to Rust 2015. `--edition` and inline configuration can override the
+language edition. `--style-edition` selects style rather than language.
 This repository sets its language edition in `rustfmt.toml`.
 
 ## Output and checking
@@ -102,7 +120,10 @@ containing out-of-line modules, and relative `#[path]` attributes. It deduplicat
 explicit files that also belong to another input's module graph. Child modules
 use their root input's rustfmt settings, as in rustfmt. Each child independently
 loads its nearest Nitpick configuration. Unrelated `.rs` files are not scanned.
-Cargo workspace and package selection are not implemented.
+With no source files or piped input, Cargo supplies the target entry points.
+Workspace targets with different language editions run in separate groups,
+as with `cargo fmt`. A failure in a later group can leave earlier groups formatted.
+Explicit Cargo package selection flags are not implemented.
 
 File formatting runs in an isolated mirror of the module graph and rustfmt
 configuration lookup context. Absolute module paths, symlinked source paths,
@@ -130,7 +151,8 @@ Direct rustfmt can remove Nitpick's extra spacing. Configure editors and CI to
 invoke Nitpick when using this style. For this repository:
 
 ```sh
-cargo run -- --check src/main.rs src/lib.rs
+cargo run
+cargo run -- --check
 cargo check
 cargo test
 cargo clippy --all-targets -- -D warnings

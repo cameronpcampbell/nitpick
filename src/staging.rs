@@ -40,7 +40,6 @@ impl Snapshot {
             || !same_file(&metadata, &self.metadata)
         {
             return Err(at_path(&self.path, "source changed during formatting"));
-
         }
 
         Ok(())
@@ -92,7 +91,6 @@ impl Stage {
 
             if !listed.insert(path.clone()) {
                 continue;
-
             }
 
             let effective = settings(options, &path)?;
@@ -107,7 +105,6 @@ impl Stage {
                         &path,
                         &format!("rustfmt setting `{key}` cannot be mirrored safely"),
                     ));
-
                 }
             }
 
@@ -145,7 +142,6 @@ impl Stage {
 
             if covered {
                 continue;
-
             }
 
             stage.roots.push(root.clone());
@@ -157,11 +153,9 @@ impl Stage {
                             path,
                             "shared module has conflicting root language editions",
                         ));
-
                     }
 
                     continue;
-
                 }
 
                 let snapshot = snapshot.clone();
@@ -208,7 +202,6 @@ impl Stage {
 
                 if path.is_dir() {
                     continue;
-
                 }
 
                 match fs::read(&path) {
@@ -234,7 +227,6 @@ impl Stage {
                 idx += 1;
 
                 continue;
-
             }
 
             let original = safe_path(Path::new(&arguments[idx + 1]))?;
@@ -252,7 +244,6 @@ impl Stage {
                     arguments.drain(idx..idx + 2);
 
                     continue;
-
                 }
 
                 self.copy_context(&original)?;
@@ -280,12 +271,10 @@ impl Stage {
 
         if options.verbose {
             arguments.push("--verbose".into());
-
         }
 
         if options.quiet {
             arguments.push("--quiet".into());
-
         }
 
         arguments.push("--".into());
@@ -326,7 +315,6 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
             Component::ParentDir => {
                 if !resolved.pop() {
                     return Err(unsupported(path, "path escapes the filesystem root"));
-
                 }
             }
             Component::CurDir => {}
@@ -340,14 +328,12 @@ fn safe_path(path: &Path) -> Result<PathBuf> {
                     .contains(&resolved.as_path())
             {
                 resolved = fs::canonicalize(&resolved).map_err(|error| at_path(path, error))?;
-
             } else {
                 return Err(unsupported(
                     path,
                     "symlinked source or module paths are unsupported",
                 ));
             }
-
         }
     }
 
@@ -379,7 +365,6 @@ fn user_configuration() -> Result<Vec<u8>> {
 
             if path.is_file() {
                 return fs::read(&path).map_err(|error| at_path(&path, error));
-
             }
         }
     }
@@ -409,12 +394,10 @@ fn module_path(module: &ast::Module, owner: &Path) -> Result<Option<PathBuf>> {
     for attr in module.attrs() {
         if attr.simple_name().is_some_and(|name| name == "cfg_attr") {
             return Err(unsupported(owner, "cfg_attr on modules is unsupported"));
-
         }
 
         if attr.simple_name().is_none_or(|name| name != "path") {
             continue;
-
         }
 
         let literal = attr
@@ -436,7 +419,6 @@ fn module_path(module: &ast::Module, owner: &Path) -> Result<Option<PathBuf>> {
                 owner,
                 "absolute or repeated module paths are unsupported",
             ));
-
         }
 
         value = Some(path);
@@ -460,12 +442,10 @@ fn discover(
 
     if active.contains(&path) {
         return Err(unsupported(&path, "cyclic module graph"));
-
     }
 
     if graph.contains_key(&path) {
         return Ok(());
-
     }
 
     let original = fs::read(&path).map_err(|error| at_path(&path, error))?;
@@ -493,7 +473,6 @@ fn discover(
 
     if !recursive || is_skipped {
         return Ok(());
-
     }
 
     active.insert(path.clone());
@@ -527,7 +506,6 @@ fn record_directory(
                 .expect("owner snapshot")
                 .directories
                 .insert(normalized);
-
         }
     }
 
@@ -546,7 +524,6 @@ fn scan(
     for child in node.children() {
         if skipped(&child) {
             continue;
-
         }
 
         if let Some(call) = ast::MacroCall::cast(child.clone()) {
@@ -557,11 +534,9 @@ fn scan(
                     owner,
                     "modules inside cfg_if! or cfg_select! are unsupported",
                 ));
-
             }
 
             continue;
-
         }
 
         if matches!(
@@ -572,7 +547,6 @@ fn scan(
                 | SyntaxKind::ATTR
         ) {
             continue;
-
         }
 
         let Some(module) = ast::Module::cast(child.clone()) else {
@@ -610,12 +584,10 @@ fn scan(
             )?;
 
             continue;
-
         }
 
         let (path, relative) = if let Some(explicit) = explicit {
             (directory.join(explicit), None)
-
         } else {
             let base = directory.join(relative.unwrap_or(Path::new("")));
             let direct = base.join(format!("{name}.rs"));
@@ -630,12 +602,10 @@ fn scan(
                         nested.display()
                     ),
                 ));
-
             }
 
             if nested.exists() {
                 (nested, None)
-
             } else {
                 (direct, Some(PathBuf::from(name)))
             }
