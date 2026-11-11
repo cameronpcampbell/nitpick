@@ -34,18 +34,15 @@ pub fn run(arguments: &[OsString]) -> Result<i32, LaunchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use std::fs;
     use std::io::Write;
-    use std::path::{Path, PathBuf};
-    use std::process::{Output, Stdio};
-
-    use tempfile::tempdir;
-
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::{Output, Stdio};
+    use tempfile::tempdir;
 
     const UNFORMATTED: &str = "fn main(){let answer=42;println!(\"{answer}\");}\n";
     const FORMATTED: &str = "fn main() {\n    let answer = 42;\n    println!(\"{answer}\");\n}\n";

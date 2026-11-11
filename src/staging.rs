@@ -1,19 +1,15 @@
 //! Mirror only resolved module files and their rustfmt lookup context.
-
+use super::{Edition, Options, Result, at_path, edition, settings};
+use ra_ap_syntax::ast::{self, HasAttrs, HasName};
+use ra_ap_syntax::{AstNode, AstToken, SourceFile, SyntaxKind, SyntaxNode};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, Metadata, Permissions};
-
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
-
-use ra_ap_syntax::ast::{self, HasAttrs, HasName};
-use ra_ap_syntax::{AstNode, AstToken, SourceFile, SyntaxKind, SyntaxNode};
 use tempfile::{TempDir, tempdir};
-
-use super::{Edition, Options, Result, at_path, edition, settings};
 
 #[derive(Clone)]
 pub(super) struct Snapshot {
@@ -31,7 +27,6 @@ impl Snapshot {
         safe_path(&self.path)?;
 
         let current = fs::read(&self.path).map_err(|error| at_path(&self.path, error))?;
-
         let metadata = fs::metadata(&self.path).map_err(|error| at_path(&self.path, error))?;
 
         if current != self.original
@@ -217,7 +212,6 @@ impl Stage {
 
     pub fn arguments(&mut self, options: &Options) -> Result<Vec<OsString>> {
         let mut arguments = options.rustfmt_arguments();
-
         // Config paths retain their original spelling for stdin, but must point
         // into the mirror for file transformations.
         let mut idx = 0;
@@ -450,10 +444,8 @@ fn discover(
     }
 
     let original = fs::read(&path).map_err(|error| at_path(&path, error))?;
-
     let metadata = fs::metadata(&path).map_err(|error| at_path(&path, error))?;
     let permissions = metadata.permissions();
-
     let source = std::str::from_utf8(&original).map_err(|error| at_path(&path, error))?;
     let parsed = SourceFile::parse(source, language);
     let syntax = parsed.tree().syntax().clone();
@@ -621,11 +613,9 @@ fn scan(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use nitpick::cli::{self, Invocation};
-
     use super::super::{capture, check_child};
+    use super::*;
+    use nitpick::cli::{self, Invocation};
 
     fn options(arguments: &[OsString]) -> Box<Options> {
         let invocation = cli::invocation(

@@ -1,8 +1,7 @@
-use std::ffi::OsString;
-use std::path::PathBuf;
-
 use clap::error::{ContextKind, ContextValue};
 use clap::{Parser, Subcommand};
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Parser)]
 #[command(
@@ -150,7 +149,6 @@ fn parse_options(arguments: &[OsString]) -> Result<Options, clap::Error> {
 fn parse_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Vec<OsString>, clap::Error> {
     let arguments: Vec<_> = arguments.into_iter().collect();
     let parsed = parse_options(&arguments)?;
-
     let prefix_length = if parsed.command.is_some() { 2 } else { 1 };
 
     // Retain the original spelling, ordering, and delimiters after validation.
@@ -161,7 +159,6 @@ fn parse_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Vec<OsStr
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
-
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 

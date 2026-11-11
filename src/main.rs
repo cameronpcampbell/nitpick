@@ -1,7 +1,6 @@
+use nitpick::{cli, format, rustfmt};
 use std::env;
 use std::process;
-
-use nitpick::{cli, format, rustfmt};
 
 fn main() {
     let invocation = cli::invocation(env::args_os()).unwrap_or_else(|error| error.exit());

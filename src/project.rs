@@ -1,14 +1,11 @@
 //! Discover Cargo targets and their language editions without building the project.
-
+use super::{Failure, Options, Result, at_path};
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-use serde::Deserialize;
-
-use super::{Failure, Options, Result, at_path};
 
 #[derive(Deserialize)]
 struct Metadata {

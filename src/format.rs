@@ -1,11 +1,12 @@
 //! Run rustfmt in isolation, then compare or publish the final whitespace pass.
-
+#[path = "project.rs"]
+mod project;
 #[path = "staging.rs"]
 mod staging;
 
-#[path = "project.rs"]
-mod project;
-
+use nitpick::{cli::Options, config, whitespace};
+use similar::TextDiff;
+use staging::{Snapshot, Stage};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
@@ -14,12 +15,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
-
-use nitpick::{cli::Options, config, whitespace};
-use similar::TextDiff;
 use tempfile::NamedTempFile;
-
-use staging::{Snapshot, Stage};
 use whitespace::Edition;
 
 type Result<Value> = std::result::Result<Value, Failure>;
@@ -421,13 +417,10 @@ fn replace(snapshot: &Snapshot, contents: &[u8], backup: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::path::PathBuf;
-
-    use tempfile::{TempDir, tempdir};
-
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::PathBuf;
+    use tempfile::{TempDir, tempdir};
 
     const SOURCE: &str = "trait Store { fn open(&self); fn close(&self); }\nfn main(){let answer=42; if answer>0 {call(answer);} call(answer);}\n";
 
@@ -793,7 +786,6 @@ mod tests {
         let root = directory.path();
         let path = root.join("main.rs");
         let source = "fn main() {\n    let prefix_length = if parsed.command.is_some() {\n        2\n\n    } else {\n        1\n    };\n}\n";
-
         let expected = "fn main() {\n    let prefix_length = if parsed.command.is_some() { 2 } else { 1 };\n}\n";
 
         fs::write(&path, source).unwrap();

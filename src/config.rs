@@ -1,11 +1,8 @@
 //! Nitpick configuration discovery and invocation overrides.
-
+use crate::whitespace::RuleOptions;
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use serde::Deserialize;
-
-use crate::whitespace::RuleOptions;
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -51,7 +48,6 @@ pub fn load(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use tempfile::tempdir;
 
     #[test]

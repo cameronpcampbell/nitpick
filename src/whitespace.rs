@@ -1,14 +1,11 @@
 //! Syntax-aware whitespace edits for source that has already passed through rustfmt.
-
-use std::error::Error;
-use std::fmt;
-use std::ops::Range;
-
-use serde::Deserialize;
-
 pub use ra_ap_syntax::Edition;
 use ra_ap_syntax::ast::{self, BinaryOp};
 use ra_ap_syntax::{AstNode, SourceFile, SyntaxKind, SyntaxNode, SyntaxToken, TextRange};
+use serde::Deserialize;
+use std::error::Error;
+use std::fmt;
+use std::ops::Range;
 
 /// Each switch controls only the boundaries requested by that rule.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
